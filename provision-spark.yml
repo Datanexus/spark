@@ -1,0 +1,126 @@
+#!/usr/bin/env ansible-playbook
+#
+# (c) 2017 DataNexus Inc.  All Rights Reserved
+---
+# Build our spark and spark_master host groups
+- name: Create spark and spark_master host groups
+  hosts: localhost
+  gather_facts: yes
+  vars_files:
+    - vars/spark.yml
+  tasks:
+    # load the 'configuration file' (if one was defined) to get any variables
+    # we might need during this playbook run
+    - name: Load configuration file
+      include_vars:
+        file: "{{config_file | default('config.yml')}}"
+    # if we're using dynamic provisioning; build the host groups from the
+    # meta-data associated with the matching nodes in the selected cloud
+    - block:
+      # if we're deploying instances in an cloud environment, ensure that there
+      # are an appriately tagged set of nodes already (and launch them if they
+      # don't exist based on the node_map entries for this application)
+      - include_role:
+          name: 'aws'
+        when: cloud is undefined or cloud == 'aws'
+      - include_role:
+          name: 'osp'
+        when: cloud == 'osp'
+      # then, build the zookeeper group from those nodes
+      - include_role:
+          name: build-app-host-groups
+        vars:
+          host_group_list:
+            - { name: spark, role: master }
+            - name: spark
+            - name: zookeeper
+      when: cloud is defined and (cloud == 'aws' or cloud == 'osp')
+
+# If we're dynamically provisioning, then do some final configuration on the
+# VMs that were just launched (assuming that we're not re-using existing VMs)
+- name: Complete OS configuration
+  hosts: spark_master:spark
+  gather_facts: yes
+  vars_files:
+    - vars/spark.yml
+  tasks:
+    # first, initialize the play
+    - include_role:
+        name: initialize-play
+      vars:
+        gather_facts: false
+        skip_network_restart: true
+    # if this is a cloud deployment and we need to (re)configure nodes...
+    - block:
+      # then run the `preflight` role to finish the configuration of the nodes
+      # that were just allocated
+      - include_role:
+          name: preflight
+        vars:
+          mountpoint: "/data"
+      # and set a fact indicating that we (re)configured nodes in this play
+      - set_fact:
+          configured_nodes: true
+      when:
+        - cloud is defined and (cloud == 'aws' or cloud == 'osp')
+        - ((force_node_reconfig | default(false)) | bool) or not(hostvars['localhost']['matching_instances_found'])
+
+# Collect some Zookeeper related facts (if a `zookeeper` host group is defined)
+- name: Gather facts from Zookeeper host group (if defined)
+  hosts: zookeeper
+  tasks: []
+
+# Then, deploy Spark to the nodes in the spark_master host group
+- name: Install/configure servers (master nodes)
+  hosts: spark_master
+  gather_facts: no
+  vars_files:
+    - vars/spark.yml
+  vars:
+    - combined_package_list: "{{ (default_packages|default([])) | union(spark_package_list) | union((install_packages_by_tag|default({})).spark|default([])) }}"
+    - spark_master_nodes: "{{groups['spark_master'] | default([])}}"
+    - zookeeper_nodes: "{{groups['zookeeper'] | default([])}}"
+    - cluster_role: master
+  pre_tasks:
+    # first, initialize the play by loading any `config_file` that may have
+    # been passed in, restarting the network on the target nodes (if desired),
+    # and determining the `data_iface` and `api_iface` values from the input
+    # `iface_description_array` (if one was passed in)
+    - include_role:
+        name: initialize-play
+      vars:
+        skip_network_restart: "{{configured_nodes | default(false)}}"
+    # and set a few facts that we'll need later in the playbook
+    - set_fact:
+        zk_nodes: "{{zookeeper_nodes | map('extract', hostvars, [('ansible_' + data_iface), 'ipv4', 'address']) | list}}"
+        is_multi_master_play: "{{(spark_master_nodes | length) > 1}}"
+        spark_master_data_ips: "{{(spark_master_nodes | default([data_addr])) | map('extract', hostvars, ['ansible_' + data_iface, 'ipv4', 'address']) | list}}"
+  roles:
+    # now that we have all of the facts we need, provision the input nodes
+    - role: spark
+
+# Once the master nodes have been deployed, repeat the same process to deploy Spark to the nodes in
+# the spark host group
+- name: Install/configure servers (worker nodes)
+  hosts: spark
+  gather_facts: no
+  vars_files:
+    - vars/spark.yml
+  vars:
+    - combined_package_list: "{{ (default_packages|default([])) | union(spark_package_list) | union((install_packages_by_tag|default({})).spark|default([])) }}"
+    - spark_master_nodes: "{{groups['spark_master'] | default([])}}"
+  pre_tasks:
+    # first, initialize the play by loading any `config_file` that may have
+    # been passed in, restarting the network on the target nodes (if desired),
+    # and determining the `data_iface` and `api_iface` values from the input
+    # `iface_description_array` (if one was passed in)
+    - include_role:
+        name: initialize-play
+      vars:
+        skip_network_restart: "{{configured_nodes | default(false)}}"
+    # and set a fact that we'll need later in the playbook
+    - set_fact:
+        spark_master_data_ips: "{{(spark_master_nodes | default([data_addr])) | map('extract', hostvars, ['ansible_' + data_iface, 'ipv4', 'address']) | list}}"
+  roles:
+    # now that we have all of the facts we need, provision the input nodes
+    - role: spark

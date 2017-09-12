@@ -1,0 +1,57 @@
+# (c) 2017 DataNexus Inc.  All Rights Reserved
+
+# Variables that are necessary for all deployments of
+# Apache Spark
+---
+application: spark
+
+spark_dir: /opt/apache-spark
+spark_data_dir: /data
+spark_package_list: ["java-1.8.0-openjdk", "java-1.8.0-openjdk-devel"]
+
+spark_group: spark
+spark_user: spark
+
+# define the parameters needed to download and unpack the Apache Spark
+# distribution
+spark_version: "2.2.0"
+# spark_url: "https://www-us.apache.org/dist/spark/spark-{{spark_version}}/spark-{{spark_version}}-bin-without-hadoop.tgz"
+spark_url: "https://www-us.apache.org/dist/spark/spark-{{spark_version}}/spark-{{spark_version}}-bin-hadoop2.7.tgz"
+
+# path used to access private keys (defaults to the playbook directory)
+private_key_path: "{{playbook_dir}}"
+
+# define a few defaults that are used when deploying the Spark cluster
+spark_master_port: 7077
+spark_master_webui_port: 8080
+spark_worker_port: 7178
+spark_worker_webui_port: 8181
+
+# this variable defines the default cluster that will be created when deploying
+# to an AWS or OpenStack environment; the value defined here will result in a
+# five-node multi-master cluster with two master nodes and three worker nodes
+node_map:
+  - { application: spark, role: master, count: 2 }
+  - { application: spark, count: 3 }
+
+# and define a set of application-specific security group rules; this list of
+# dictionary entries is used when setting up an application-specific security
+# on the network used by this application; the rules defined here allow for:
+#
+#  - SSH access to the nodes from any network
+#  - internode communication on the spark_master_port
+#  - internode communication on the spark_worker_port
+#  - internode communications with an external Zookeeper ensemble via port 2181
+#  - internal subnet connections via the spark_master_webui_port
+#  - internal subnet connections via the spark_worker_webui_port
+#
+# this set of rules should, more than likely, not be overridden; if it is
+# overridden, then care should be taken to at least maintain this default list
+# of application-specific security group rules or the nodes in the cluster may
+# not be able to communicate with each other
+application_sg_rules:
+  - { proto: tcp, from_port: "{{spark_master_port}}", to_port: "{{spark_master_port}}", cidr_ip: "{{internal_subnet}}" }
+  - { proto: tcp, from_port: "{{spark_worker_port}}", to_port: "{{spark_worker_port}}", cidr_ip: "{{internal_subnet}}" }
+  - { proto: tcp, from_port: 2181, to_port: 2181, cidr_ip: "{{internal_subnet}}" }
+  - { proto: tcp, from_port: "{{spark_master_webui_port}}", to_port: "{{spark_master_webui_port}}", cidr_ip: "{{internal_subnet}}" }
+  - { proto: tcp, from_port: "{{spark_worker_webui_port}}", to_port: "{{spark_worker_webui_port}}", cidr_ip: "{{internal_subnet}}" }

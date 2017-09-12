@@ -1,0 +1,16 @@
+# (c) 2017 DataNexus Inc.  All Rights Reserved
+---
+- include: install-required-packages.yml static=no
+# now that the OpenJDK packages are installed, determine the location
+# of the `javac` executable to use when setting the JAVA_HOME variable
+# in our systemd service file
+- name: Determine JAVA_HOME location
+  shell: 'dirname "$(dirname "$(readlink -f "$(which javac)")")"'
+  register: command_output
+- set_fact: java_home='{{command_output.stdout}}'
+- include: add-spark-user.yml static=no
+- include: install-apache-spark.yml static=no
+- include_role:
+    name: configure-spark-nodes
+- include: create-spark-service.yml static=no
+- include: start-spark-services.yml static=no

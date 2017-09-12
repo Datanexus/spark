@@ -1,0 +1,65 @@
+# (c) 2017 DataNexus Inc.  All Rights Reserved
+---
+# First, setup a couple of facts so that know which interface the UI should be bound
+# to (based on whether or not we're securing the cluster) and so that we can test
+# whether we're uploading the Spark distribution from a file local to the Ansible node
+# or downloading the distribution from a URL
+- set_fact:
+    install_from_dir: "{{not(local_spark_file is undefined or local_spark_file is none or local_spark_file | trim == '')}}"
+- set_fact:
+    install_from_url: "{{not(spark_url is undefined or spark_url is none or spark_url | trim == '')}}"
+  when: not(install_from_dir)
+# If we're installing from a URL, then download the Spark
+# distribution from that URL
+- block:
+  - name: Download Spark distribution to /tmp
+    get_url:
+      url: "{{spark_url}}"
+      dest: /tmp
+      mode: 0644
+      validate_certs: no
+    environment: "{{environment_vars | default({})}}"
+  - set_fact:
+      spark_filename: "{{spark_url | basename}}"
+  when: install_from_url is defined and install_from_url
+# If we're installing from a local file, then upload the Spark
+# distribution from that local file
+- block:
+  - name: Upload Spark distribution from a local directory to /tmp
+    copy:
+      src: "{{local_spark_file}}"
+      dest: "/tmp"
+      mode: 0644
+  - set_fact:
+      spark_filename: "{{local_spark_file | basename}}"
+  when: install_from_dir
+# regardless of which option was used, we need to unpack the
+# distribution file and setup the basic configuration options
+# using a template
+- block:
+  # create the directory Spark will be unpacked into
+  - name: Create Spark home directory {{spark_dir}}
+    file:
+      path: "{{spark_dir}}"
+      state: directory
+      mode: 0755
+      owner: "{{spark_user}}"
+      group: "{{spark_group}}"
+  # unpack the distribution file
+  - name: Unpack spark distribution into {{spark_dir}}
+    unarchive:
+      copy: no
+      src: "/tmp/{{spark_filename}}"
+      dest: "{{spark_dir}}"
+      extra_opts: [ --strip-components=1 ]
+      owner: "{{spark_user}}"
+      group: "{{spark_group}}"
+  # create the data directory
+  - name: Create Spark data directory {{spark_data_dir}}/spark
+    file:
+      path: "{{spark_data_dir}}/spark"
+      state: directory
+      mode: 0755
+      owner: "{{spark_user}}"
+      group: "{{spark_group}}"
+  become: true
