@@ -17,16 +17,19 @@
     # if we're using dynamic provisioning; build the host groups from the
     # meta-data associated with the matching nodes in the selected cloud
     - block:
-      # if we're deploying instances in an cloud environment, ensure that there
-      # are an appriately tagged set of nodes already (and launch them if they
-      # don't exist based on the node_map entries for this application)
-      - include_role:
-          name: 'aws'
-        when: cloud is undefined or cloud == 'aws'
-      - include_role:
-          name: 'osp'
-        when: cloud == 'osp'
-      # then, build the zookeeper group from those nodes
+      # get a list of the node_map entries for this application
+      - set_fact:
+          node_map_entries: "{{node_map | selectattr('application', 'equalto', application) | list}}"
+          node_map_master_entries: "{{node_map | selectattr('application', 'equalto', application) | selectattr('role', 'defined') | selectattr('role', 'equalto', 'master') | list}}"
+      # if more than two node_map entries were found or no matching node_map
+      # entries were found, then it's an error
+      - fail:
+          msg: "Multiple {{application}} node_map entries found"
+        when: node_map_entries | length > 2
+      - fail:
+          msg: "No {{application}} node_map entries found"
+        when: node_map_entries | length == 0
+      # build the spark and zookeeper host groups from existing inventory
       - include_role:
           name: build-app-host-groups
         vars:
@@ -34,6 +37,34 @@
             - { name: spark, role: master }
             - name: spark
             - name: zookeeper
+      - set_fact:
+          num_spark_master_nodes: "{{groups['spark_master'] | default([]) | length}}"
+          num_spark_nodes: "{{groups['spark'] | default([]) | length}}"
+          num_zk_nodes: "{{groups['zookeeper'] | default([]) | length}}"
+      # if at least one master node was not found (or at least one master node
+      # is not defined in the node_map), then it's an error
+      - fail:
+          msg: "At least one master node must be provided for Spark deployments"
+        when:
+          - (num_spark_master_nodes | int == 0) and (node_map_master_entries.0.count == 0)
+      # if an external Zookeeper ensemble (or node) was not found and we're
+      # deploying an multi-master Spark cluster (or multiple matching Spark
+      # Master nodes were found), then it's an error
+      - fail:
+          msg: "An external Zookeeper ensemble is required for multi-master Spark deployments"
+        when:
+          - (num_spark_master_nodes | int == 0 and node_map_master_entries.0.count > 1) or num_spark_master_nodes | int > 1
+          - num_zk_nodes | int == 0
+      # if there were no Spark nodes found, then deploy a matching set of
+      # instances into the target cloud environment, ensuring that there
+      # are an appropriately tagged, based on the input tags and the node_map
+      # entries for this application
+      - include_role:
+          name: 'aws'
+        when: num_spark_master_nodes | int == 0 and num_spark_nodes | int == 0 and cloud == 'aws'
+      - include_role:
+          name: 'osp'
+        when: num_spark_master_nodes | int == 0 and num_spark_nodes == 0 and cloud == 'osp'
       when: cloud is defined and (cloud == 'aws' or cloud == 'osp')
 
 # If we're dynamically provisioning, then do some final configuration on the
@@ -63,7 +94,7 @@
           configured_nodes: true
       when:
         - cloud is defined and (cloud == 'aws' or cloud == 'osp')
-        - ((force_node_reconfig | default(false)) | bool) or not(hostvars['localhost']['matching_instances_found'])
+        - ((force_node_reconfig | default(false)) | bool) or ((hostvars['localhost']['num_spark_master_nodes'] | int) == 0 and (hostvars['localhost']['num_spark_nodes'] | int) == 0)
 
 # Collect some Zookeeper related facts (if a `zookeeper` host group is defined)
 - name: Gather facts from Zookeeper host group (if defined)
