@@ -2,11 +2,11 @@
 ---
 # create an initial version of the spark-defaults.conf file from the
 # template in this role
-- include: add-spark-defaults.yml static=no
+- include_tasks: add-spark-defaults.yml
 # and add a log4j.properties file
-- include: add-log4j-properties.yml static=no
+- include_tasks: add-log4j-properties.yml
 # finally, if this is a multi-master play, then configure the target nodes of
 # this play as a multi-master cluster that talk to each other through the
 # external Zookeeper ensemble defined by the `zk_nodes` list
-- include: configure-ha-cluster.yml static=no
+- include_tasks: configure-ha-cluster.yml
   when: (zk_nodes | default([])) != [] and is_multi_master_play
